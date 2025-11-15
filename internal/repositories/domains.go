@@ -6,6 +6,18 @@ import (
 	models "ssl-manager/internal/models"
 )
 
+func (r *Repository) IsDomainExists(ctx context.Context, domain string) (bool, error) {
+	const query = `SELECT EXISTS(SELECT 1 FROM domains WHERE domain_name = $1);`
+
+	var exists bool
+	err := r.DB.QueryRow(ctx, query, domain).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+
+	return exists, nil
+}
+
 func (r *Repository) GetDomainsCount(ctx context.Context, filters models.DomainsFilters) (int, error) {
 	r.log.Debug("Filters in repo layer: ", filters)
 

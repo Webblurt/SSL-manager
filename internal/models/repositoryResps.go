@@ -14,6 +14,20 @@ type GetDomainsDTO struct {
 	Domains       []DomainsDTO
 }
 
+type CertsDTO struct {
+	ID              string
+	Issuer          *string
+	CertPath        string
+	KeyPath         string
+	ChainPath       *string
+	ValidFrom       *time.Time
+	ValidTo         *time.Time
+	LastRenewal     *time.Time
+	RenewalAttempts int
+	CreatedAt       time.Time
+	CreatedBy       string
+}
+
 type DomainsDTO struct {
 	ID         string
 	DomainName string

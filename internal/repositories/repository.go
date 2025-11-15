@@ -67,6 +67,30 @@ func (r *Repository) UpdateTx(ctx context.Context, tx pgx.Tx, entity models.Enti
 	return nil
 }
 
+func (r *Repository) GetIDByNameTx(ctx context.Context, tx pgx.Tx, entity models.Entity) (string, error) {
+	r.log.Debug("EntityName: '", entity.EntityName, "'")
+	var column, value string
+	for k, v := range entity.StringParameters {
+		column = k
+		value = v
+		break
+	}
+	query := fmt.Sprintf("SELECT id FROM %s WHERE %s = $1", entity.EntityName, column)
+	var id string
+	r.log.Debug("Query execution: ", query)
+	err := tx.QueryRow(ctx, query, value).Scan(&id)
+	if err != nil {
+		r.log.Debug("Error returned from query: ", err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			r.log.Debug("No rows found, returning empty string + err 'no rows selected'")
+			return "", errors.New("no rows selected")
+		}
+		return "", err
+	}
+	r.log.Debug("Query executed.")
+	return id, nil
+}
+
 func buildInsertQuery(entity models.Entity) (columns string, values []interface{}, placeholders string) {
 	var cols []string
 	var ph []string

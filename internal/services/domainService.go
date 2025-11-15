@@ -7,7 +7,60 @@ import (
 )
 
 func (s *Service) GetDomains(filters models.GetDomainsReq) (models.GetDomainsResp, error) {
+	s.log.Debug("Fetching list of domains started............")
+	offset := (filters.Page - 1) * filters.PageSize
+	repoFilters := models.DomainsFilters{
+		DomainName: filters.DomainName,
+		Status:     filters.Status,
+		UserID:     filters.UserID,
+		Limit:      &filters.PageSize,
+		Offset:     &offset,
+	}
 
+	s.log.Debug("Fetching stocks count from repo...")
+	totalElements, err := s.repository.GetDomainsCount(s.ctx, repoFilters)
+	if err != nil {
+		s.log.Error("Error while getting total stock count: ", err)
+		return models.GetDomainsResp{}, err
+	}
+	s.log.Debug("Count: ", totalElements)
+
+	totalPages := (totalElements + filters.Page - 1) / filters.PageSize
+	hasNext := filters.Page < totalPages
+	hasPrev := filters.Page > 1
+	nextPage := 0
+	prevPage := 0
+	if hasNext {
+		nextPage = filters.Page + 1
+	}
+	if hasPrev {
+		prevPage = filters.Page - 1
+	}
+
+	s.log.Debug("Fetching list of domains from repo...")
+	domains, err := s.repository.GetDomainsList(s.ctx, repoFilters)
+	if err != nil {
+		s.log.Error("Error while getting list of domains: ", err)
+		return models.GetDomainsResp{}, err
+	}
+	s.log.Debug("List of domains: ", domains)
+
+	var d []models.Domains
+	for _, domain := range domains {
+		d = append(d, models.ConvertDomainsDTOToDomains(domain))
+	}
+
+	return models.GetDomainsResp{
+		TotalPages:    totalPages,
+		Page:          filters.Page,
+		PageSize:      filters.PageSize,
+		TotalElements: totalElements,
+		HasNext:       hasNext,
+		HasPrev:       hasPrev,
+		NextPage:      nextPage,
+		PrevPage:      prevPage,
+		Domains:       d,
+	}, nil
 }
 
 func (s *Service) CreateDomain(req models.CreateDomainReq) (string, error) {
@@ -28,7 +81,7 @@ func (s *Service) CreateDomain(req models.CreateDomainReq) (string, error) {
 	}()
 
 	// check for existance
-	exists, err := s.repository.IsDomainExists(tx, req.Domain)
+	exists, err := s.repository.IsDomainExists(s.ctx, req.Domain)
 	if err != nil {
 		return "", err
 	}
@@ -193,8 +246,12 @@ func (s *Service) DeleteDomain(filters models.DeleteDomainReq) error {
 	domainID := filters.DomainID
 	// check for existance
 	if filters.DomainName != "" {
-		domainID, err = s.repository.GetDomainByName(tx, filters.DomainName)
+		domainID, err := s.repository.GetIDByNameTx(s.ctx, tx, models.Entity{
+			EntityName:       "domains",
+			StringParameters: map[string]string{"domain_name": filters.DomainName},
+		})
 		if err != nil {
+			s.log.Error("Error while getting domain id: ", err)
 			return err
 		}
 		if domainID == "" {
@@ -223,39 +280,35 @@ func (s *Service) DeleteDomain(filters models.DeleteDomainReq) error {
 	}
 
 	// fetchin certificates
-	certs, err := s.repository.GetCertificatesByDomain(tx, domainID)
+	certs, err := s.repository.GetCertificatesByDomain(s.ctx, domainID)
 	if err != nil {
 		s.log.Error("Error fetching certificates: ", err)
 		return err
 	}
 
 	// deleting files
-	for _, cert := range certs {
-		err := s.client.DeleteCertificateFiles(cert.CertPath, cert.KeyPath, cert.ChainPath)
-		if err != nil {
-			s.log.Warn(fmt.Sprintf("Error deleting certificate files for domain %s: %v", filters.DomainName, err))
-		}
+	err = s.client.DeleteCertificateFiles(certs.CertPath, certs.KeyPath, *certs.ChainPath)
+	if err != nil {
+		s.log.Warn(fmt.Sprintf("Error deleting certificate files for domain %s: %v", filters.DomainName, err))
 	}
 
 	// mark certs deleted
-	for _, cert := range certs {
-		certEntity := models.Entity{
-			EntityName: "certificates",
-			StringParameters: map[string]string{
-				"deleted_by": filters.UserID,
-				"updated_by": filters.UserID,
-			},
-			TimeParameters: map[string]time.Time{
-				"deleted_at": time.Now(),
-			},
-			IntegerParameters: make(map[string]int),
-			BoolParameters:    make(map[string]bool),
-		}
-		err := s.repository.UpdateTx(s.ctx, tx, certEntity, cert.ID)
-		if err != nil {
-			s.log.Error("Error updating certificate record: ", err)
-			return err
-		}
+	certEntity := models.Entity{
+		EntityName: "certificates",
+		StringParameters: map[string]string{
+			"deleted_by": filters.UserID,
+			"updated_by": filters.UserID,
+		},
+		TimeParameters: map[string]time.Time{
+			"deleted_at": time.Now(),
+		},
+		IntegerParameters: make(map[string]int),
+		BoolParameters:    make(map[string]bool),
+	}
+	err = s.repository.UpdateTx(s.ctx, tx, certEntity, certs.ID)
+	if err != nil {
+		s.log.Error("Error updating certificate record: ", err)
+		return err
 	}
 
 	// creating new event
